@@ -7,7 +7,8 @@ import copy
 # threshold at 50%
 stavelineWidthThresh = 0.5
 
-colourIn = False
+# used for visualising progress..
+output = None
 
 def show(img, factor=0.5):
     """ show an image until the escape key is pressed
@@ -60,11 +61,12 @@ def deskew(img):
                                               rotation,(imgWidth,imgHeight)))
     return(deskewed)
 
-def find_blobs(img):
+def find_blobs(img_binary):
     """Find blobs in the given image, returned as a list of associative
     lists containing various cheap metrics for each blob."""
 
     blobs = []
+    img_inverted = cv2.bitwise_not(img_binary)
     contours, hierarchy = cv2.findContours(img_inverted,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
     for (i, c) in enumerate(contours):
         blob = {}
@@ -102,7 +104,7 @@ def find_blobs(img):
     return blobs
 
 
-def find_stavelines(img, output):
+def find_stavelines(img):
     """Finds potential stavelines, using threshold of y-projection."""
     result = []
     y_projection = []
@@ -129,7 +131,7 @@ def find_stavelines(img, output):
             if line_start >= 0:
                 middle = (line_start + (y-1)) / 2
                 lines.append(middle)
-                if colourIn:
+                if output:
                     cv2.line(output,(0,middle),(imgWidth,middle),(255,0,255),3)
                     cv2.line(output,(0,middle),(b,middle),(255,0,0),2)
                 line_start = -1
@@ -164,7 +166,7 @@ def extract_bars(system, blobs):
             barstop = system['width']
         else:
             barstop = barlines[i+1]
-        print("barstart %d barstop %d" % (barstart, barstop))
+        #print("barstart %d barstop %d" % (barstart, barstop))
         contours = [system['contour']]
         x1 = barstart
         y1 = system['location'][1]
@@ -172,7 +174,7 @@ def extract_bars(system, blobs):
         y2 = system['location'][3]
         h = y2 - y1
         w = x2 - x1
-        print("height %d width %d" % (h, w))
+        #print("height %d width %d" % (h, w))
         for blob in blobs:
             if blob['parent'] == system:
                 if blob['rect']['x'] >= barstart and blob['rect']['x'] + blob['rect']['width'] <= barstop:
@@ -190,7 +192,7 @@ def extract_bars(system, blobs):
                'location': [x1,y1,x2,y2]
         }
         result.append(bar)
-        show(img_bar)
+        #show(img_bar)
     return(result)
 
 def find_bars(img_binary, system, blobs):
@@ -239,7 +241,7 @@ def find_bars(img_binary, system, blobs):
     for x in range(0, system['width']):
         (top,mid,bot) = x_projection[x]
         #print("mid: %f top %f bot: %f" % (mid,top,bot))
-        if colourIn:
+        if output:
             cv2.line(system['image'],(x,first_staveline),(x,int(first_staveline+((last_staveline-first_staveline)*mid))),(255,255,0),1)
 
         if top < 0.6 and bot < 0.6 and mid > 0.95:
@@ -250,7 +252,7 @@ def find_bars(img_binary, system, blobs):
                 # check there is nothing either side of 'barline'
                 barline_stop = x-1
                 barline_mid = barline_stop - ((barline_stop - barline_start)/2)
-                print("barline start %d stop %d mid %d" % (barline_start, barline_stop, barline_mid))
+                #print("barline start %d stop %d mid %d" % (barline_start, barline_stop, barline_mid))
                 left = int(max(0,barline_start-gap_dist))
                 right = int(min(system['width']-1,(x-1)+gap_dist))
 
@@ -264,20 +266,36 @@ def find_bars(img_binary, system, blobs):
                     total = total + x_projection[i][1]
                 right_avg = total / ((gap_tolerance*2)+1)
                     
-                cv2.line(system['image'],(left,first_staveline),(left,last_staveline),(255,0,255),1)
-                cv2.line(system['image'],(right,first_staveline),(right,last_staveline),(255,0,255),1)
+                if output:
+                    cv2.line(system['image'],(left,first_staveline),(left,last_staveline),(255,0,255),1)
+                    cv2.line(system['image'],(right,first_staveline),(right,last_staveline),(255,0,255),1)
 
                 if (left_avg <= gap_min and right_avg <= gap_min):
                     barlines.append(barline_mid)
-                    cv2.line(system['image'],(barline_mid,first_staveline),(barline_mid,last_staveline),(255,0,0),3)
+                    if output:
+                        cv2.line(system['image'],(barline_mid,first_staveline),(barline_mid,last_staveline),(255,0,0),3)
                 else:
-                    cv2.line(system['image'],(barline_mid,first_staveline),(barline_mid,last_staveline),(0,255,0),3)
+                    if output:
+                        cv2.line(system['image'],(barline_mid,first_staveline),(barline_mid,last_staveline),(255,0,0),3)
+                        cv2.line(system['image'],(barline_mid,first_staveline),(barline_mid,last_staveline),(0,255,0),3)
                 barline_start = -1
     (x1, y1, x2, y2) = system['location']
     #show(system['image'][y1:y2, x1:x2])
 
-def find_systems(img_binary, output):
-    stavelines = find_stavelines(img_binary, img)
+def preprocess(img):
+    global imgHeight, imgWidth, imgDepth
+
+    imgHeight, imgWidth, imgDepth = img.shape
+    img = deskew(img)
+
+    # Binarisation
+    img_gray = cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)
+    ret2,img_binary = cv2.threshold(img_gray,0,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU)
+    return img, img_binary
+
+
+def find_systems(img, img_binary):
+    stavelines = find_stavelines(img_binary)
     blobs = find_blobs(img_binary)
     systems = []
 
@@ -294,7 +312,7 @@ def find_systems(img_binary, output):
                 blob['stavelines'] = found_stavelines
                 systems.append(blob)
                 #print("found system with %d stavelines" % len(found_stavelines))
-                if colourIn:
+                if output:
                     cv2.drawContours(output,[blob['contour']],-1, (0, 0,255), 2)
             else:
                 #print("didn't find system with %d stavelines" % staveline_count)
@@ -316,7 +334,7 @@ def find_systems(img_binary, output):
                     if isParent:
                         blob['parent'] = system
                         blob['intersection'] = rect
-                        if colourIn:
+                        if output:
                             cv2.drawContours(output,[blob['contour']],-1, (0, 255,0), 2)
 
     # create new image for systems
@@ -354,20 +372,14 @@ def find_systems(img_binary, output):
         system['bar_images'] = extract_bars(system, blobs)
     return(systems, blobs)
 
-def segment(fn):
-    img = cv2.imread(source)
-    imgHeight, imgWidth, imgDepth = img.shape
-    img = deskew(img)
+def segment(source):
 
-    # Binarisation
-    img_gray = cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)
-    ret2,img_binary = cv2.threshold(img_gray,0,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU)
-    img_inverted = cv2.bitwise_not(img_binary)
+    img = cv2.imread(source)
 
     # Noise reduction
     # denoised = cv2.fastNlMeansDenoising(img)
 
-    show(img)
+    img, img_binary = preprocess(img)
 
-    systems, blobs = find_systems(img_binary, img)
-
+    systems, blobs = find_systems(img, img_binary)
+    return(systems)
