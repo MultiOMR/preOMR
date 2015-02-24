@@ -21,7 +21,7 @@ def process(infile, outfile):
     # TODO make deskewing an option
     po.deskew()
     #po.staffline_removal()
-    po.find_ossia()
+    po.remove_ossia()
     po.save(outfile)
 
 # Commandline parameter processing

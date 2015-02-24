@@ -449,7 +449,7 @@ class PreOMR(object):
         x2 = r['x'] + r['width']
         return(img[y1:y2, x1:x2])
 
-    def find_ossia(self):
+    def remove_ossia(self):
         img = self.img
         
         (staveblobs, otherblobs) = self.find_staveblobs()
@@ -491,14 +491,16 @@ class PreOMR(object):
 
             if len(staves) == 1 and len(staves[0]) >= 4:
                 print("aha ossia with %d lines" % (len(staves[0]),))
-                cv2.imwrite('blobtest_%d.png' % i, dest)
+                
+                if self.debug:
+                    cv2.imwrite('blobtest_%d.png' % i, dest)
                 i = i + 1
                 dest = cv2.bitwise_not(dest)
                 result = cv2.bitwise_xor(result, dest)
-            cv2.imwrite('blobtest.png', result)
+            if self.debug:
+                cv2.imwrite('blobtest.png', result)
+            self.img = result
                 
-
     def save(self, outfile):
         cv2.imwrite(outfile, self.img)
-
 
