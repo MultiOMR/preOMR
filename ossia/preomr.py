@@ -452,12 +452,13 @@ class PreOMR(object):
     def remove_ossia(self):
         img = self.img
         
+        ossia_mask = np.ones(self.img.shape[:2], dtype="uint8") * 255
+
         (staveblobs, otherblobs) = self.find_staveblobs()
         print("blobs %d/%d" % (len(staveblobs), len(otherblobs)))
         #staves = self.find_staves(img)
 
         working_img = img.copy()
-        result = img.copy()
 
         for blob in staveblobs:
             miny = self.imgHeight
@@ -494,12 +495,21 @@ class PreOMR(object):
                 
                 if self.debug:
                     cv2.imwrite('blobtest_%d.png' % i, dest)
-                i = i + 1
-                dest = cv2.bitwise_not(dest)
-                result = cv2.bitwise_xor(result, dest)
-            if self.debug:
-                cv2.imwrite('blobtest.png', result)
-            self.img = result
+                    i = i + 1
+                cv2.drawContours(ossia_mask, [blob['contour']], -1, 0, -1)
+
+        # erode a little to get rid of 'ghosting' around ossia
+        kernel = np.ones((4,4),np.uint8)
+        ossia_mask=cv2.erode(ossia_mask,kernel,iterations=4)
+        
+        cv2.imwrite('posterode.png', mask)
+        
+        result = img.copy()
+        inverted = cv2.bitwise_not(result)
+        result = cv2.bitwise_or(inverted,inverted,mask=ossia_mask)
+        result = cv2.bitwise_not(result)
+
+        self.img = result
                 
     def save(self, outfile):
         cv2.imwrite(outfile, self.img)
