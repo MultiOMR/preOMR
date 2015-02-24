@@ -12,7 +12,7 @@ from gamera.toolkits.musicstaves import stafffinder_projections
 from gamera.plugins import numpy_io
 init_gamera()
 
-import ossiafinder_dalitz
+#import ossiafinder_dalitz
 
 def intersect(r1,r2):
     """Returns the intersection of two rectangles"""
