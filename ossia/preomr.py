@@ -8,6 +8,7 @@ from gamera.core import *
 from gamera.toolkits.musicstaves import musicstaves_rl_roach_tatem
 from gamera.toolkits.musicstaves import musicstaves_rl_fujinaga
 from gamera.toolkits.musicstaves import stafffinder_miyao
+from gamera.toolkits.musicstaves import stafffinder_dalitz
 from gamera.toolkits.musicstaves import stafffinder_projections
 from gamera.plugins import numpy_io
 init_gamera()
@@ -50,6 +51,15 @@ def show(img, factor=0.5):
 #        if k==32:    # Space to stop
 #            cv2.destroyAllWindows()
 #            break
+
+
+def max_staff_height(blob):
+    result = 0
+    for staff in blob['staves']:
+        top = staff[0].y_list[0]
+        bottom = staff[-1].y_list[0]
+        result = max(result, bottom-top)
+    return(result)
 
 
 def deskew(img):
@@ -96,7 +106,7 @@ class PreOMR(object):
     stavelineWidthThresh = 0.5
     
     def __init__(self, infile, deskew=False):
-        self.debug = False
+        self.debug = True
         self.infile = infile
         self.img = cv2.imread(self.infile)
         if deskew:
@@ -128,16 +138,17 @@ class PreOMR(object):
         gamera_img = numpy_io.from_numpy(img)
         #sf = stafffinder_projections.StaffFinder_projections(gamera_img)
         #sf.find_staves(follow_wobble=True,preprocessing=0)
+        #sf = stafffinder_dalitz.StaffFinder_dalitz(gamera_img)
         sf = stafffinder_miyao.StaffFinder_miyao(gamera_img)
         sf.find_staves()
-        #sf = ossiafinder_dalitz.Ossiafinder_dalitz(gamera_img)
         #sf.find_staves(debug=2)
 
         staves = sf.get_skeleton()
-        #for i, staff in enumerate(staves):
-        #    print "Staff %d has %d staves:" % (i+1, len(staff))
-        #    for j, line in enumerate(staff):
-        #        print("    %d. line at (%d,%d)" % (j+1,line.left_x,line.y_list[0]))
+#        if self.debug:
+#            for i, staff in enumerate(staves):
+#                print "Staff %d has %d staves:" % (i+1, len(staff))
+#                for j, line in enumerate(staff):
+#                    print("    %d. line at (%d,%d)" % (j+1,line.left_x,line.y_list[0]))
         return(staves)
 
     def find_blobs(self, img_binary):
@@ -365,11 +376,21 @@ class PreOMR(object):
         staveblobs = []
         otherblobs = []
 
+        if self.debug:
+            for staff in staves:
+                for line in staff:
+                    y = line.y_list[0]
+                    cv2.line(self.debug_img,(0,y),(self.imgWidth,y),(0,255,0),3)
         for blob in blobs:
             rect = blob['rect']
             blob['staves'] = []
             blob['system'] = False
+            # large enough to contain a stave?
+            blob['large'] = False
             if rect['width'] > (self.imgWidth * self.stavelineWidthThresh):
+                blob['large'] = True
+                if self.debug:
+                    cv2.drawContours(self.debug_img,[blob['contour']],-1, (0, 255,255),2)
                 for staff in staves:
                     inside = True
                     for staveline in staff:
@@ -383,7 +404,7 @@ class PreOMR(object):
                         blob['staves'].append(staff)
             if blob['system']:
                 staveblobs.append(blob)
-                #print("found system with %d staves" % len(blob['staves']))
+                print("found system with %d staves" % len(blob['staves']))
                 if self.debug:
                     cv2.drawContours(self.debug_img,[blob['contour']],-1, (0, 0,255), 2)
             else:
@@ -494,6 +515,12 @@ class PreOMR(object):
         ossia_mask = np.ones(self.img.shape[:2], dtype="uint8") * 255
 
         (staveblobs, otherblobs) = self.find_staveblobs()
+        staff_heights = map(lambda s: max_staff_height(s), staveblobs)
+        staff_height = max(staff_heights)
+        height_thresh = staff_height * 0.75
+
+        ossias = filter(lambda s: max_staff_height(s) < height_thresh, staveblobs)
+        
         print("blobs %d/%d" % (len(staveblobs), len(otherblobs)))
         #staves = self.find_staves(img)
 
@@ -511,11 +538,13 @@ class PreOMR(object):
         (staveblobs, otherblobs) = self.find_staveblobs(img=working_img)
         print("blobs %d/%d" % (len(staveblobs), len(otherblobs)))
         i = 0
+#        for blob in otherblobs[112:113]:
         for blob in otherblobs:
             if blob['rect']['width'] < (self.imgWidth / 50):
                 continue
-            if blob['rect']['width'] > (self.imgWidth / 2):
-                continue
+#            if blob['rect']['width'] > (self.imgWidth / 2):
+#                continue
+
             src = self.img
             mask = np.zeros((self.imgHeight,self.imgWidth,1), np.uint8)
             cv2.drawContours(mask, [blob['contour']], -1, (255,255,255), -1);
@@ -525,28 +554,39 @@ class PreOMR(object):
             cropped = self.blob_image(dest, blob)
 
             gi = numpy_io.from_numpy(cropped)
-            sf = stafffinder_projections.StaffFinder_projections(gi)
+            #sf = stafffinder_projections.StaffFinder_projections(gi)
+            #sf = stafffinder_miyao.StaffFinder_miyao(gi)
+            sf = stafffinder_dalitz.StaffFinder_dalitz(gi)
             sf.find_staves()
             staves = sf.get_skeleton()
 
-            if len(staves) == 1 and len(staves[0]) >= 4:
-                print("aha ossia with %d lines" % (len(staves[0]),))
-                
-                if self.debug:
-                    cv2.imwrite('blobtest_%d.png' % i, dest)
-                    i = i + 1
-                cv2.drawContours(ossia_mask, [blob['contour']], -1, 0, -1)
+            if (len(staves) > 0):
+                maxlines = max(map(len, staves))
+            else:
+                maxlines = 0
+            if maxlines >= 4:
+                print("aha ossia with %d lines" % (maxlines,))
+                ossias.append(blob)
+        for ossia in ossias:
+            if self.debug:
+                fn = 'removed_%d.png' % i
+                cv2.imwrite(fn, cropped)
+                i = i + 1
+            cv2.drawContours(ossia_mask, [ossia['contour']], -1, 0, -1)
 
         # erode a little to get rid of 'ghosting' around ossia
         kernel = np.ones((4,4),np.uint8)
         ossia_mask=cv2.erode(ossia_mask,kernel,iterations=4)
         
-        cv2.imwrite('posterode.png', mask)
+        #cv2.imwrite('posterode.png', mask)
         
         result = img.copy()
         inverted = cv2.bitwise_not(result)
         result = cv2.bitwise_or(inverted,inverted,mask=ossia_mask)
         result = cv2.bitwise_not(result)
+
+        if self.debug:
+            cv2.imwrite('debug.png', self.debug_img)
 
         self.img = result
 
