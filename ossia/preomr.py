@@ -24,6 +24,16 @@ def intersect(r1,r2):
     result['area'] = result['width'] * result['height']
     return(result)
 
+def ydist(r1,r2):
+    """distance on y-axis between two non-interecting rectangles"""
+    top1 = r1['y']
+    bottom1 = r1['y'] + r1['height']
+
+    top2 = r2['y']
+    bottom2 = r2['y'] + r2['height']
+    return(min(abs(top1-bottom2), abs(top2-bottom1)))
+    
+
 def show(img, factor=0.5):
     """ show an image until the escape key is pressed
     :param factor: scale factor (default 0.5, half size)
@@ -41,13 +51,56 @@ def show(img, factor=0.5):
 #            cv2.destroyAllWindows()
 #            break
 
+
+def deskew(img):
+    """Deskews the given image based on lines detected with opencv's
+    HoughLines function."""
+    print "Deskewing."
+    imgHeight, imgWidth, imgDepth = img.shape
+    img_gray = cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)
+    img_edges = cv2.Canny(img_gray,50,150,apertureSize = 3)
+    minLineLength = int(imgWidth*0.5)
+    houghThresh = int(imgWidth*0.15)
+    maxLineGap = 10
+    #lines = cv2.HoughLinesP(img_edges,1,np.pi/(180*1),houghThresh,minLineLength,maxLineGap)
+    lines = cv2.HoughLines(img_edges,1,np.pi/(180*3),houghThresh)
+
+    angles = []
+    for rho,theta in lines[0]:
+        angles.append((theta - (np.pi / 2)))
+        
+        a = np.cos(theta)
+        b = np.sin(theta)
+        x0 = a*rho
+        y0 = b*rho
+        x1 = int(x0 + imgWidth*(-b))
+        y1 = int(y0 + imgWidth*(a))
+        x2 = int(x0 - imgWidth*(-b))
+        y2 = int(y0 - imgWidth*(a))
+        #cv2.line(img,(x1,y1),(x2,y2),(255,0,0),2)
+
+    middle = np.median(angles)
+    middle_deg = middle * (180/np.pi)
+    
+    rotation = cv2.getRotationMatrix2D((imgWidth/2,imgHeight/2),middle_deg,1.0)
+    
+    # rotate while inverted. the background is filled with zeros
+    # (black), this inversion means that ends up white
+    deskewed = cv2.bitwise_not(cv2.warpAffine(cv2.bitwise_not(img),
+                                              rotation,
+                                              (imgWidth,imgHeight))
+                           )
+    return(deskewed)
+
 class PreOMR(object):
     stavelineWidthThresh = 0.5
     
-    def __init__(self, infile):
-        self.debug = True
+    def __init__(self, infile, deskew=False):
+        self.debug = False
         self.infile = infile
         self.img = cv2.imread(self.infile)
+        if deskew:
+            self.img = deskew(self.img)
         self.original = self.img
         self.imgHeight, self.imgWidth, self.imgDepth = self.img.shape
         self.img_gray = cv2.cvtColor(self.img,cv2.COLOR_BGR2GRAY)
@@ -58,46 +111,6 @@ class PreOMR(object):
                                              THRESH_BINARY+cv2.
                                              THRESH_OTSU)
     
-    def deskew(self):
-        """Deskews the given image based on lines detected with opencv's
-        HoughLines function."""
-        print "Deskewing."
-        img = self.img
-        img_gray = cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)
-        img_edges = cv2.Canny(img_gray,50,150,apertureSize = 3)
-        minLineLength = int(self.imgWidth*0.5)
-        houghThresh = int(self.imgWidth*0.15)
-        maxLineGap = 10
-        #lines = cv2.HoughLinesP(img_edges,1,np.pi/(180*1),houghThresh,minLineLength,maxLineGap)
-        lines = cv2.HoughLines(img_edges,1,np.pi/(180*3),houghThresh)
-
-        angles = []
-        for rho,theta in lines[0]:
-            angles.append((theta - (np.pi / 2)))
-            
-            a = np.cos(theta)
-            b = np.sin(theta)
-            x0 = a*rho
-            y0 = b*rho
-            x1 = int(x0 + self.imgWidth*(-b))
-            y1 = int(y0 + self.imgWidth*(a))
-            x2 = int(x0 - self.imgWidth*(-b))
-            y2 = int(y0 - self.imgWidth*(a))
-            #cv2.line(img,(x1,y1),(x2,y2),(255,0,0),2)
-
-        middle = np.median(angles)
-        middle_deg = middle * (180/np.pi)
-            
-        rotation = cv2.getRotationMatrix2D((self.imgWidth/2,self.imgHeight/2),middle_deg,1.0)
-
-        # rotate while inverted. the background is filled with zeros
-        # (black), this inversion means that ends up white
-        deskewed = cv2.bitwise_not(cv2.warpAffine(cv2.bitwise_not(img),
-                                                  rotation,
-                                                  (self.imgWidth,self.imgHeight))
-            )
-        self.img = deskewed
-
     def staffline_removal(self):
         gamera_img = numpy_io.from_numpy(self.img)
         #self.save('tmp.png')
@@ -378,31 +391,41 @@ class PreOMR(object):
         return(staveblobs, otherblobs)
 
     def find_systems(self):
-        img = self.img
+        img = self.img_binary
+        #print "finding staves"
         (staveblobs, otherblobs) = self.find_staveblobs()
+        #print("found %d staves" % (len(staveblobs),))
         blobs = staveblobs + otherblobs
         self.blobs = blobs
-        systems = []
-        self.systems = staveblobs
+        # systems = []
+        systems = staveblobs
 
         # attach disconnected bits in bounding box
+        tidied = 0
         for blob in blobs:
             if not blob['system']:
+                blob['parent'] = None
                 for system in systems:
                     rect = intersect(system['rect'], blob['rect'])
                     if (rect['height'] > 0 and rect['width'] > 0):
-                        isParent = False
-                        if blob['parent'] == None:
-                            isParent = True
-                        else:
-                            # Biggest intersection wins
-                            if rect['area'] > blob['intersection']['area']:
-                                isParent = True
-                                if isParent:
-                                    blob['parent'] = system
-                                    blob['intersection'] = rect
-                                    if self.debug:
-                                        cv2.drawContours(self.debug_img,[blob['contour']],-1, (0, 255,0), 2)
+                        # Biggest intersection wins
+                        if (blob['parent'] == None) or (rect['area'] > blob['intersection']['area']):
+                            blob['parent'] = system
+                            blob['intersection'] = rect
+
+                # Just assign to closest bounding rectangle on y-axis
+                if blob['parent'] == None:
+                    mindist = None
+                    for system in systems:
+                        dist = ydist(system['rect'], blob['rect'])
+                        if mindist == None or mindist > dist:
+                            blob['parent'] = system
+                            mindist = dist
+                    if blob['parent'] == None:
+                        print "wtf"
+                    else:
+                        tidied = tidied + 1
+        #print "tidied %d" % tidied
 
         # create new image for systems
         for system in systems:
@@ -412,8 +435,10 @@ class PreOMR(object):
             x2 = system['rect']['x'] + system['rect']['width']
             y2 = system['rect']['y'] + system['rect']['height']
 
+            children = 0
             for blob in blobs:
                 if blob['parent'] == system:
+                    children = children + 1
                     contours.append(blob['contour'])
                     # include blob in image size/location
                     x1 = min(x1, blob['rect']['x'])
@@ -421,12 +446,17 @@ class PreOMR(object):
                     x2 = max(x2, blob['rect']['x'] + blob['rect']['width'])
                     y2 = max(y2, blob['rect']['y'] + blob['rect']['height'])
 
+            #print("found %d children" % children)
+
             mask = np.zeros((self.imgHeight,self.imgWidth,1), np.uint8)
 
             cv2.drawContours(mask, contours, -1, 255, -1);
             #src = img[x1:y1, x2:y2]
             #srcMask = mask[y1:y2, x1:x2]
-            inv = cv2.bitwise_not(img)
+            kernel = np.ones((4,4),np.uint8)
+            mask=cv2.dilate(mask,kernel,iterations=3)
+
+            inv = cv2.bitwise_not(self.img)
             dest = cv2.bitwise_and(inv,inv,mask = mask)
             dest = cv2.bitwise_not(dest)
 
@@ -435,8 +465,17 @@ class PreOMR(object):
             system['location'] = (x1, y1, x2, y2)
             system['height'] = h
             system['width'] = w
-            self.find_bars(system)
-            system['bar_images'] = self.extract_bars(system, blobs)
+
+            min_x = self.imgWidth
+
+            for staff in system['staves']:
+                for line in staff:
+                    min_x = min(min_x, line.left_x)
+
+            system['stave_min_x'] = min_x
+
+            #self.find_bars(system)
+            #system['bar_images'] = self.extract_bars(system, blobs)
         if self.debug:
             cv2.imwrite('debug.png', self.debug_img)
         return(systems,blobs)
@@ -510,7 +549,58 @@ class PreOMR(object):
         result = cv2.bitwise_not(result)
 
         self.img = result
-                
+
+    def split_movements(self, outfileA, outfileB):
+        # 2% of page width
+        indentThresh = 0.02 * self.imgWidth
+
+        systems, blobs = self.find_systems()
+        
+        # Top - down order
+        systems = sorted(systems, key=lambda system: system['rect']['y'])
+
+        xs = []
+        for system in systems:
+            xs.append(system['stave_min_x'])
+        threshold = min(xs) + indentThresh
+        
+        # Skip the first one, we don't split if the movement starts at top
+        # of page
+        found = None
+        for i in range(1,len(systems)):
+            #cv2.imwrite("system%d.png" %i, systems[i]['image'])
+            if xs[i] > threshold:
+                if found != None:
+                    print "Oops, more than one movement found."
+                found = i
+                print("New movement at system %d" % (i+1))
+
+        if (found):
+            self.save_systems(outfileA, systems[:found])
+            self.save_systems(outfileB, systems[found:])
+        return(found)
+
     def save(self, outfile):
         cv2.imwrite(outfile, self.img)
 
+    def save_systems(self, outfile, systems):
+        print "saving %s" % outfile
+        contours = []
+        for system in systems:
+            contours.append(system['contour'])
+
+            for blob in self.blobs:
+                if blob['parent'] == system:
+                    contours.append(blob['contour'])
+
+        mask = np.zeros((self.imgHeight,self.imgWidth,1), np.uint8)
+        
+        cv2.drawContours(mask, contours, -1, 255, -1);
+
+        kernel = np.ones((4,4),np.uint8)
+        mask=cv2.dilate(mask,kernel,iterations=1)
+        
+        inv = cv2.bitwise_not(self.img)
+        dest = cv2.bitwise_and(inv,inv,mask = mask)
+        dest = cv2.bitwise_not(dest)
+        cv2.imwrite(outfile,dest)
