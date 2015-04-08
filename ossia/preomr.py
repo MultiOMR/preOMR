@@ -409,6 +409,7 @@ class PreOMR(object):
                     cv2.drawContours(self.debug_img,[blob['contour']],-1, (0, 0,255), 2)
             else:
                 otherblobs.append(blob)
+
         return(staveblobs, otherblobs)
 
     def find_systems(self):
@@ -420,7 +421,7 @@ class PreOMR(object):
         self.blobs = blobs
         # systems = []
         systems = staveblobs
-
+        
         # attach disconnected bits in bounding box
         tidied = 0
         for blob in blobs:
@@ -508,6 +509,20 @@ class PreOMR(object):
         y2 = r['y'] + r['height']
         x2 = r['x'] + r['width']
         return(img[y1:y2, x1:x2])
+
+#    def join_broken_staves(self):
+#        img = self.img
+#        (staveblobs, otherblobs) = self.find_staveblobs()
+#        for i in range(0, len(staveblobs)-1):
+#            for j in range(i, len(staveblobs)):
+#                a = staveblobs[i]
+#                b = staveblobs[j]
+#                atop = a['rect']['x']
+#                abot = a['rect']['x'] + a['rect']['height']
+#                btop = b['rect']['x']
+#                bbot = b['rect']['x'] + b['rect']['height']
+#                if atop > btop and a
+        
 
     def remove_ossia(self):
         img = self.img
@@ -607,7 +622,7 @@ class PreOMR(object):
         # Skip the first one, we don't split if the movement starts at top
         # of page
         found = None
-        for i in range(1,len(systems)):
+        for i in range(0,len(systems)):
             #cv2.imwrite("system%d.png" %i, systems[i]['image'])
             if xs[i] > threshold:
                 if found != None:
@@ -615,7 +630,9 @@ class PreOMR(object):
                 found = i
                 print("New movement at system %d" % (i+1))
 
-        if (found):
+        if (found == 0):
+            self.save_systems(outfileA, systems)
+        else:
             self.save_systems(outfileA, systems[:found])
             self.save_systems(outfileB, systems[found:])
         return(found)

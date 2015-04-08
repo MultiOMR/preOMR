@@ -20,8 +20,9 @@ def process(infile, outfileA, outfileB):
     # TODO make deskewing an option
     #po.deskew()
     #po.staffline_removal()
-    if po.split_movements(outfileA, outfileB):
-        print "success"
+    rv = po.split_movements(outfileA, outfileB)
+    if rv != None:
+        print "new movement at position %d" % rv
         sys.exit(0)
     else:
         print "no change of movement detected"
